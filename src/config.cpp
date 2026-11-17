@@ -835,6 +835,8 @@ namespace config {
     platf::get_host_name(),  // sunshine_name,
     "sunshine_state.json"s,  // file_state
     {},  // external_ip
+    {},  // sp_trusted_client_cert
+    false,  // sp_disable_pin_pairing
   };
 
   /**
@@ -1725,6 +1727,11 @@ namespace config {
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
+    // Gaspar bridge trust: the existing cert/pkey options continue to secure the server.
+    if (vars.contains("sp_trusted_client_cert")) {
+      path_f(vars, "sp_trusted_client_cert", nvhttp.sp_trusted_client_cert);
+    }
+    bool_f(vars, "sp_disable_pin_pairing", nvhttp.sp_disable_pin_pairing);
     string_f(vars, "sunshine_name", nvhttp.sunshine_name);
     path_f(vars, "log_path", config::sunshine.log_file);
     path_f(vars, "file_state", nvhttp.file_state);

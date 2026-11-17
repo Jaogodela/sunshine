@@ -173,6 +173,7 @@ namespace nvhttp {
     std::string uuid;  ///< Persistent Moonlight client UUID associated with the certificate.
     std::string cert;  ///< Certificate PEM string or path.
     bool enabled = true;  ///< Whether this persisted client entry may connect.
+    bool persisted = true;  ///< Whether this entry is written to the state file.
   };
 
   /**
@@ -274,6 +275,10 @@ namespace nvhttp {
 
     pt::ptree named_cert_nodes;
     for (auto &named_cert : client.named_devices) {
+      if (!named_cert.persisted) {
+        continue;
+      }
+
       pt::ptree named_cert_node;
       named_cert_node.put("name"s, named_cert.name);
       named_cert_node.put("cert"s, named_cert.cert);
@@ -457,6 +462,56 @@ namespace nvhttp {
       save_state();
     }
     return client_root.named_devices.back().uuid;
+  }
+
+  /**
+   * @brief Authorize the pre-provisioned Gaspar bridge client certificate without PIN pairing.
+   *
+   * The certificate is loaded from `sp_trusted_client_cert` and added to the in-memory paired-client
+   * database only, so it is authorized for the lifetime of the process but never written to the state
+   * file. The existing `cert` and `pkey` options continue to provide the server certificate and key;
+   * no separate server certificate options are required.
+   *
+   * @return `true` when the configured certificate is authorized, `false` when the option is empty or
+   * the certificate cannot be read or parsed.
+   */
+  bool apply_trusted_client_cert() {
+    if (config::nvhttp.sp_trusted_client_cert.empty()) {
+      return false;
+    }
+
+    auto cert_pem = file_handler::read_file(config::nvhttp.sp_trusted_client_cert.c_str());
+    auto canonical_certificate = canonical_certificate_pem(cert_pem);
+    if (canonical_certificate.empty()) {
+      BOOST_LOG(error) << "Couldn't load pre-provisioned client certificate from "sv << config::nvhttp.sp_trusted_client_cert;
+      return false;
+    }
+
+    auto certificate = crypto::x509(canonical_certificate);
+    if (!certificate) {
+      BOOST_LOG(error) << "Invalid pre-provisioned client certificate in "sv << config::nvhttp.sp_trusted_client_cert;
+      return false;
+    }
+
+    std::lock_guard lock {client_auth_mutex()};
+    for (const auto &named_cert : client_root.named_devices) {
+      auto stored_certificate = crypto::x509(named_cert.cert);
+      if (stored_certificate && X509_cmp(stored_certificate.get(), certificate.get()) == 0) {
+        return true;
+      }
+    }
+
+    named_cert_t named_cert;
+    named_cert.name = "sp-bridge";
+    named_cert.cert = std::move(canonical_certificate);
+    named_cert.uuid = uuid_util::uuid_t::generate().string();
+    named_cert.enabled = true;
+    named_cert.persisted = false;
+    client_root.named_devices.emplace_back(std::move(named_cert));
+    rebuild_client_cert_chain();
+
+    BOOST_LOG(info) << "Authorized pre-provisioned Gaspar bridge client certificate"sv;
+    return true;
   }
 
   /**
@@ -665,6 +720,10 @@ namespace nvhttp {
   }
 
   bool cancel_pairing(const std::string_view pairing_id) {
+    if (config::nvhttp.sp_disable_pin_pairing) {
+      return false;
+    }
+
     if (!is_valid_pairing_id(pairing_id)) {
       return false;
     }
@@ -1040,6 +1099,19 @@ namespace nvhttp {
   void pair(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
     print_req<T>(request);
 
+    if (config::nvhttp.sp_disable_pin_pairing) {
+      pt::ptree tree;
+      tree.put("root.paired", 0);
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "PIN pairing disabled");
+
+      std::ostringstream data;
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+      return;
+    }
+
     pt::ptree tree;
 
     auto fg = util::fail_guard([&]() {
@@ -1105,6 +1177,10 @@ namespace nvhttp {
   }
 
   bool pin(const std::string_view pairing_id, std::string pin, std::string name) {
+    if (config::nvhttp.sp_disable_pin_pairing) {
+      return false;
+    }
+
     if (!is_valid_pairing_id(pairing_id) || !is_valid_pairing_pin(pin) || !is_valid_pairing_name(name)) {
       return false;
     }
@@ -1615,6 +1691,13 @@ namespace nvhttp {
       load_state();
     }
 
+    // Gaspar: authorize the pre-provisioned bridge client after any state loading.
+    apply_trusted_client_cert();
+
+    if (http::unique_id.empty()) {
+      http::unique_id = uuid_util::uuid_t::generate().string();
+    }
+
     auto pkey = file_handler::read_file(config::nvhttp.pkey.c_str());
     auto cert = file_handler::read_file(config::nvhttp.cert.c_str());
     setup(pkey, cert);
@@ -1747,10 +1830,15 @@ namespace nvhttp {
   }
 
   void erase_all_clients() {
-    std::lock_guard lock {client_auth_mutex()};
-    client_root = {};
-    cert_chain.clear();
-    save_state();
+    {
+      std::lock_guard lock {client_auth_mutex()};
+      client_root = {};
+      cert_chain.clear();
+      save_state();
+    }
+
+    // Gaspar: keep the pre-provisioned bridge authorized after an unpair-all.
+    apply_trusted_client_cert();
   }
 
   bool unpair_client(const std::string_view uuid) {
