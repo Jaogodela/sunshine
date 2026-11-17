@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <chrono>
 #include <list>
 #include <thread>
 #include <utility>
@@ -33,6 +34,7 @@ extern "C" {
 #include "logging.h"
 #include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
+#include "sp_metrics.h"
 #include "sync.h"
 #include "video.h"
 
@@ -1701,7 +1703,14 @@ namespace video {
     while (capture_ctx_queue->running()) {
       bool artificial_reinit = false;
 
+      auto last_capture_ts = std::chrono::steady_clock::now();
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        if (frame_captured) {
+          const auto now = std::chrono::steady_clock::now();
+          sp_metrics::observe_capture_ms(std::chrono::duration<double, std::milli>(now - last_capture_ts).count());
+          last_capture_ts = now;
+        }
+
         KITTY_WHILE_LOOP(auto capture_ctx = std::begin(capture_ctxs), capture_ctx != std::end(capture_ctxs), {
           if (!capture_ctx->images->running()) {
             capture_ctx = capture_ctxs.erase(capture_ctx);
@@ -2467,6 +2476,7 @@ namespace video {
 
       if (requested_idr_frame) {
         session->request_idr_frame();
+        sp_metrics::add_idr(1);
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
@@ -2498,9 +2508,16 @@ namespace video {
         break;
       }
 
+      const auto encode_start = std::chrono::steady_clock::now();
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
+      }
+      sp_metrics::observe_encode_ms(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - encode_start).count());
+
+      // No fresh capture timestamp means the encoder produced a duplicated frame.
+      if (!frame_timestamp) {
+        sp_metrics::add_frames_dropped(1);
       }
 
       session->request_normal_frame();
@@ -2740,7 +2757,14 @@ namespace video {
 
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
+      auto last_capture_ts = std::chrono::steady_clock::now();
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        if (frame_captured) {
+          const auto now = std::chrono::steady_clock::now();
+          sp_metrics::observe_capture_ms(std::chrono::duration<double, std::milli>(now - last_capture_ts).count());
+          last_capture_ts = now;
+        }
+
         while (encode_session_ctx_queue.peek()) {
           auto encode_session_ctx = encode_session_ctx_queue.pop();
           if (!encode_session_ctx) {
@@ -2779,6 +2803,7 @@ namespace video {
           if (ctx->idr_events->peek()) {
             pos->session->request_idr_frame();
             ctx->idr_events->pop();
+            sp_metrics::add_idr(1);
           }
 
           if (frame_captured && pos->session->convert(*img)) {
@@ -2793,11 +2818,17 @@ namespace video {
             frame_timestamp = img->frame_timestamp;
           }
 
+          const auto encode_start = std::chrono::steady_clock::now();
           if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp)) {
             BOOST_LOG(error) << "Could not encode video packet"sv;
             ctx->shutdown_event->raise(true);
 
             continue;
+          }
+          sp_metrics::observe_encode_ms(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - encode_start).count());
+
+          if (!frame_timestamp) {
+            sp_metrics::add_frames_dropped(1);
           }
 
           pos->session->request_normal_frame();

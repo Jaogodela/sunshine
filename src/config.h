@@ -389,6 +389,7 @@ namespace config {
     std::uint16_t port;  ///< TCP port used by Sunshine services.
     std::string address_family;  ///< Address family requested for listening sockets.
     std::string bind_address;  ///< Local address Sunshine should bind to.
+    int sp_metrics_port;  ///< Gaspar: optional local metrics/events HTTP port; zero disables the endpoint.
 
     std::string log_file;  ///< Path to the configured log file.
     bool notify_pre_releases;  ///< Notify users about pre-release updates.

@@ -40,6 +40,7 @@
 #include "main.h"
 #include "nvhttp.h"
 #include "process.h"
+#include "sp_metrics.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -491,6 +492,7 @@ int main(int argc, char *argv[]) {
   std::jthread httpThread {nvhttp::start};
   std::jthread configThread {confighttp::start};
   std::jthread rtspThread {rtsp_stream::start};
+  std::jthread metricsThread {sp_metrics::start};
 
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user
@@ -518,9 +520,12 @@ int main(int argc, char *argv[]) {
 
   mainThreadLoop(shutdown_event);
 
+  sp_metrics::stop();
+
   httpThread.join();
   configThread.join();
   rtspThread.join();
+  metricsThread.join();
 
   task_pool.stop();
   task_pool.join();

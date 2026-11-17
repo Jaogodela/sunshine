@@ -1678,6 +1678,36 @@ supported on the current platform.
     </tr>
 </table>
 
+### sp_metrics_port
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Optional local HTTP port for observability. When non-zero, Sunshine serves Prometheus metrics at
+            /metrics and long-poll session events at /sp/events.
+            The endpoint binds to bind_address when it is set, otherwise it binds to 127.0.0.1.
+            Set to 0 to disable the endpoint. The endpoint has no authentication, so keep it on a trusted network.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0-65535</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            sp_metrics_port = 9587
+            @endcode</td>
+    </tr>
+</table>
+
 ### port
 
 <table>

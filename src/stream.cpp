@@ -31,6 +31,7 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "sp_metrics.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -1808,6 +1809,7 @@ namespace stream {
                 }
               }
               frame_send_batch_latency_logger.second_point_now_and_log();
+              sp_metrics::add_bytes_sent(current_batch_size * (blocksize + shards.prefixsize));
 
               ratecontrol_group_packets_sent += current_batch_size;
               ratecontrol_frame_packets_sent += current_batch_size;
