@@ -11,6 +11,8 @@
 
 // standard includes
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <cstdint>
 #include <format>
 #include <future>
@@ -36,7 +38,11 @@ namespace {
      */
     void SetUp() override {
       original_sunshine_ = config::sunshine;
+      original_file_apps_ = config::stream.file_apps;
       config::sunshine.sp_metrics_port = 0;
+      test_apps_ = std::filesystem::temp_directory_path() / "sp_metrics_apps.json";
+      std::ofstream(test_apps_) << "[]\n";
+      config::stream.file_apps = test_apps_.string();
     }
 
     /**
@@ -44,10 +50,15 @@ namespace {
      */
     void TearDown() override {
       config::sunshine = std::move(original_sunshine_);
+      config::stream.file_apps = original_file_apps_;
+      std::error_code ec;
+      std::filesystem::remove(test_apps_, ec);
     }
 
   private:
     config::sunshine_t original_sunshine_ {};  ///< Configuration restored after each test.
+    std::string original_file_apps_;  ///< Default apps.json path restored after each test.
+    std::filesystem::path test_apps_;  ///< Temporary apps.json so apply_config can run in tests.
   };
 
   /**
@@ -58,15 +69,24 @@ namespace {
    * @return Sample value, or an empty string when the series is absent.
    */
   std::string metric_value(std::string_view text, std::string_view name) {
+    // Prometheus sample lines start with the metric name. Skip # HELP / # TYPE
+    // comments, which also contain the same name followed by a space.
     const auto needle = std::string {name} + ' ';
-    const auto line_start = text.find(needle);
-    if (line_start == std::string_view::npos) {
-      return {};
+    std::size_t search = 0;
+    while (search < text.size()) {
+      const auto found = text.find(needle, search);
+      if (found == std::string_view::npos) {
+        return {};
+      }
+      const bool at_line_start = found == 0 || text[found - 1] == '\n';
+      if (at_line_start) {
+        const auto value_start = found + needle.size();
+        const auto value_end = text.find('\n', value_start);
+        return std::string {text.substr(value_start, value_end - value_start)};
+      }
+      search = found + 1;
     }
-
-    const auto value_start = line_start + needle.size();
-    const auto value_end = text.find('\n', value_start);
-    return std::string {text.substr(value_start, value_end - value_start)};
+    return {};
   }
 
   /**
