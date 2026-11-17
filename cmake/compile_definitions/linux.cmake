@@ -238,7 +238,20 @@ endif()
 if(X11_FOUND)
     add_compile_definitions(SUNSHINE_BUILD_X11)
     include_directories(SYSTEM ${X11_INCLUDE_DIR})
-    list(APPEND PLATFORM_LIBRARIES ${X11_LIBRARIES})
+
+    # XTest is required by the Gaspar sp_kbm_backend=xtest input backend.
+    find_library(SUNSHINE_XTST_LIBRARY NAMES Xtst)
+    if(NOT SUNSHINE_XTST_LIBRARY AND X11_XTest_LIB)
+        set(SUNSHINE_XTST_LIBRARY "${X11_XTest_LIB}")
+    endif()
+    if(NOT SUNSHINE_XTST_LIBRARY AND X11_Xtst_LIB)
+        set(SUNSHINE_XTST_LIBRARY "${X11_Xtst_LIB}")
+    endif()
+    if(NOT SUNSHINE_XTST_LIBRARY)
+        message(FATAL_ERROR "X11 is enabled but libXtst was not found. Install libxtst-dev or configure with -DSUNSHINE_ENABLE_X11=OFF.")
+    endif()
+    list(APPEND PLATFORM_LIBRARIES ${SUNSHINE_XTST_LIBRARY} ${X11_LIBRARIES})
+
     list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/platform/linux/x11grab.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/x11grab.cpp")
@@ -301,7 +314,9 @@ set(LIBEVDEV_CUSTOM_INCLUDE_DIR "${EVDEV_INCLUDE_DIR}")
 set(LIBEVDEV_CUSTOM_LIBRARY "${EVDEV_LIBRARY}")
 
 list(APPEND PLATFORM_TARGET_FILES
-        "${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid.cpp")
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/input/virtualhid.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/input/xtest.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/linux/input/xtest.cpp")
 
 # AppImage and Flatpak
 if (${SUNSHINE_BUILD_APPIMAGE})

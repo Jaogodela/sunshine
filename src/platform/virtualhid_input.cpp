@@ -21,6 +21,7 @@
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/platform/linux/input/xtest.h"
 #include "virtualhid_input.h"
 
 using namespace std::literals;
@@ -453,12 +454,20 @@ namespace platf::virtualhid {
       return;
     }
 
+    if (!sp_xtest::sp_kbm_uses_uinput()) {
+      sp_xtest::sp_log_disabled_backend_once();
+      return;
+    }
+
     refresh_keyboard();
     refresh_mouse();
   }
 
   void input_context_t::refresh_keyboard() {
     keyboard.reset();
+    if (!sp_xtest::sp_kbm_uses_uinput()) {
+      return;
+    }
     if (!runtime || !runtime->capabilities().supports_keyboard) {
       return;
     }
@@ -476,6 +485,9 @@ namespace platf::virtualhid {
 
   void input_context_t::refresh_mouse() {
     mouse.reset();
+    if (!sp_xtest::sp_kbm_uses_uinput()) {
+      return;
+    }
     if (!runtime || !runtime->capabilities().supports_mouse) {
       return;
     }
@@ -494,6 +506,9 @@ namespace platf::virtualhid {
   client_context_t::client_context_t(input_context_t &input):
       global {&input} {
     if (!global->runtime) {
+      return;
+    }
+    if (!sp_xtest::sp_kbm_uses_uinput()) {
       return;
     }
 
@@ -1045,30 +1060,73 @@ namespace platf {
 #endif
 
   void move_mouse(input_t &input, int deltaX, int deltaY) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      sp_xtest::move_mouse(deltaX, deltaY);
+      return;
+    }
+#endif
     virtualhid::move_mouse(virtualhid::get_input_context(input), deltaX, deltaY);
   }
 
   void abs_mouse(input_t &input, const touch_port_t &touch_port, float x, float y) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      sp_xtest::abs_mouse(touch_port, x, y);
+      return;
+    }
+#endif
     virtualhid::abs_mouse(virtualhid::get_input_context(input), touch_port, x, y);
   }
 
   void button_mouse(input_t &input, int button, bool release) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      sp_xtest::button_mouse(button, release);
+      return;
+    }
+#endif
     virtualhid::button_mouse(virtualhid::get_input_context(input), button, release);
   }
 
   void scroll(input_t &input, int high_res_distance) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      sp_xtest::scroll(high_res_distance);
+      return;
+    }
+#endif
     virtualhid::scroll(virtualhid::get_input_context(input), high_res_distance);
   }
 
   void hscroll(input_t &input, int high_res_distance) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      sp_xtest::hscroll(high_res_distance);
+      return;
+    }
+#endif
     virtualhid::hscroll(virtualhid::get_input_context(input), high_res_distance);
   }
 
   void keyboard_update(input_t &input, uint16_t modcode, bool release, uint8_t flags) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      static_cast<void>(flags);
+      sp_xtest::keyboard_update(modcode, release);
+      return;
+    }
+#endif
     virtualhid::keyboard_update(virtualhid::get_input_context(input), modcode, release, flags);
   }
 
   void unicode(input_t &input, const char *utf8, int size) {
+#ifdef __linux__
+    if (sp_xtest::sp_kbm_uses_xtest()) {
+      sp_xtest::unicode(utf8, size);
+      return;
+    }
+#endif
     virtualhid::unicode(virtualhid::get_input_context(input), utf8, size);
   }
 

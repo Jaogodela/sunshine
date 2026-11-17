@@ -13,6 +13,7 @@
 #endif
 
 // local includes
+#include "src/platform/linux/input/xtest.h"
 #include "src/platform/virtualhid_input.h"
 
 using namespace std::literals;
@@ -25,7 +26,10 @@ namespace platf {
       return caps;
     }
 
-    if (const auto &capabilities = runtime->capabilities(); config::input.native_pen_touch && (capabilities.supports_touchscreen || capabilities.supports_pen_tablet)) {
+    if (const auto &capabilities = runtime->capabilities();
+        sp_xtest::sp_kbm_uses_uinput() &&
+        config::input.native_pen_touch &&
+        (capabilities.supports_touchscreen || capabilities.supports_pen_tablet)) {
       caps |= platform_caps::pen_touch;
     }
     if (virtualhid::configured_gamepad_supports_controller_extensions()) {

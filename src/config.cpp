@@ -872,6 +872,7 @@ namespace config {
 
     {},  // sp_input_blocklist
     false,  // sp_input_block_function_keys
+    "uinput",  // sp_kbm_backend
   };
 
   /**
@@ -1816,6 +1817,11 @@ namespace config {
 
     string_f(vars, "sp_input_blocklist", input.sp_input_blocklist);
     bool_f(vars, "sp_input_block_function_keys", input.sp_input_block_function_keys);
+    string_restricted_f(vars, "sp_kbm_backend", input.sp_kbm_backend, {
+                                                                         "uinput"sv,
+                                                                         "xtest"sv,
+                                                                         "wlr_virtual"sv,
+                                                                       });
 
     to = std::numeric_limits<int>::min();
     int_f(vars, "back_button_timeout", to);

@@ -714,6 +714,40 @@ supported on the current platform.
     </tr>
 </table>
 
+### sp_kbm_backend
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Selects how keyboard and mouse input is injected into the host. The default
+            <code>uinput</code> value keeps upstream behavior and uses libvirtualhid. The
+            <code>xtest</code> value uses the X11 XTest extension and is intended for Xvfb
+            sessions (ADR-001) where host <code>uinput</code> devices must not be created.
+            The <code>wlr_virtual</code> value is reserved for a future wlr-virtual-pointer
+            backend and is not implemented; ADR-001 selects Xvfb for Gaspar sessions rather
+            than a wlroots/cage compositor. Selecting <code>wlr_virtual</code> drops keyboard
+            and mouse input.
+            When <code>xtest</code> is selected but the build has no X11/XTest support, or the
+            X display cannot be opened, keyboard and mouse input is dropped instead of
+            falling back to <code>uinput</code>. UTF-8 text injection is dropped in
+            <code>xtest</code> mode so it cannot bypass the input blocklist.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            uinput
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            sp_kbm_backend = xtest
+            @endcode</td>
+    </tr>
+</table>
+
 ### mouse
 
 <table>
