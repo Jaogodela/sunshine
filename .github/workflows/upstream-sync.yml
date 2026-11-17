@@ -1,0 +1,176 @@
+name: SP Upstream Sync
+
+# Additive Gaspar workflow. Updates the upstream-sync mirror and, when a new
+# stable upstream tag appears, rebases the sp/main patch queue onto it and
+# opens a PR. Never pushes to the upstream remote.
+#
+# A successful rebase + PR is enough for the automation to start; SP-CI on the
+# PR is the build/test gate. A live stream smoke test (repeat T-010/T-011) is
+# manual and must run on the owner's GPU/WSL machine after the PR is reviewed.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sp-upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: SunshineStream/Sunshine
+  FORK_REPO: Jaogodela/sunshine
+  GIT_AUTHOR_NAME: Gaspar upstream-sync
+  GIT_AUTHOR_EMAIL: 166837573+Jaogodela@users.noreply.github.com
+  GIT_COMMITTER_NAME: Gaspar upstream-sync
+  GIT_COMMITTER_EMAIL: 166837573+Jaogodela@users.noreply.github.com
+
+jobs:
+  sync:
+    name: Mirror upstream and rebase patch queue
+    if: github.repository == 'Jaogodela/sunshine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout sp/main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: sp/main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "${GIT_AUTHOR_NAME}"
+          git config user.email "${GIT_AUTHOR_EMAIL}"
+          # Fetch-only upstream remote. Push URL is disabled on purpose.
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git remote set-url --push upstream DISABLE_PUSH_TO_UPSTREAM
+          git fetch upstream --tags --prune --force
+          git fetch origin --tags --prune --force
+
+      - name: Fast-forward upstream-sync
+        run: |
+          set -euo pipefail
+          git checkout -B upstream-sync upstream/master
+          git push origin upstream-sync:upstream-sync
+
+      - name: Detect new stable tag and open PR or issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          is_stable() {
+            local t="$1"
+            [[ "$t" == v* ]] || return 1
+            [[ "$t" != *beta* && "$t" != *rc* && "$t" != *RC* ]] || return 1
+            [[ "$t" != *alpha* && "$t" != *preview* && "$t" != *prerelease* ]] || return 1
+            [[ "$t" != *-sp.* ]] || return 1
+            return 0
+          }
+
+          old="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*-sp.*' origin/sp/main 2>/dev/null || true)"
+          if [[ -z "${old}" ]]; then
+            echo "Could not determine the current upstream base tag of sp/main"
+            exit 1
+          fi
+          echo "Current sp/main base tag: ${old}"
+
+          # Sort by tagger/creator date, not version-sort: Sunshine tags look like
+          # v2026.914.233613 vs v2026.1117.42813, where version-sort would rank
+          # 914 above 1117.
+          newest=""
+          while read -r tag; do
+            tag="${tag#refs/tags/}"
+            is_stable "${tag}" || continue
+            newest="${tag}"
+          done < <(git for-each-ref --sort=creatordate --format='%(refname)' refs/tags/v*)
+
+          if [[ -z "${newest}" ]]; then
+            echo "No stable upstream tags found"
+            exit 0
+          fi
+          echo "Newest stable tag on this clone: ${newest}"
+
+          if [[ "${newest}" == "${old}" ]]; then
+            echo "sp/main is already based on the newest stable tag"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "${newest}" origin/sp/main; then
+            echo "Newest tag ${newest} is already an ancestor of sp/main"
+            exit 0
+          fi
+
+          branch="sp/sync/${newest}"
+          git checkout -B "${branch}" origin/sp/main
+
+          conflict_log="$(mktemp)"
+          set +e
+          git rebase --onto "${newest}" "${old}" "${branch}" > "${conflict_log}" 2>&1
+          rebase_status=$?
+          set -e
+
+          if [[ "${rebase_status}" -ne 0 ]]; then
+            cat "${conflict_log}"
+            git rebase --abort || true
+            body_file="$(mktemp)"
+            {
+              echo "Automatic rebase of the Gaspar patch queue onto \`${newest}\` failed."
+              echo
+              echo "- Fork: \`${FORK_REPO}\`"
+              echo "- Previous base: \`${old}\`"
+              echo "- New upstream tag: \`${newest}\`"
+              echo "- Branch attempted: \`${branch}\`"
+              echo
+              echo "Conflict log:"
+              echo
+              echo '```text'
+              cat "${conflict_log}"
+              echo '```'
+            } > "${body_file}"
+            existing="$(gh issue list --repo "${FORK_REPO}" --search "upstream-sync ${newest} in:title" --json number --jq '.[0].number' || true)"
+            if [[ -z "${existing}" || "${existing}" == "null" ]]; then
+              gh issue create --repo "${FORK_REPO}" \
+                --title "upstream-sync: conflict rebasing onto ${newest}" \
+                --body-file "${body_file}"
+            else
+              echo "Issue #${existing} already exists for this tag"
+            fi
+            exit 0
+          fi
+
+          git push -u origin "${branch}"
+
+          title="sp: rebase patch queue onto ${newest}"
+          existing_pr="$(gh pr list --repo "${FORK_REPO}" --head "${branch}" --base sp/main --json number --jq '.[0].number' || true)"
+          if [[ -n "${existing_pr}" && "${existing_pr}" != "null" ]]; then
+            echo "PR #${existing_pr} already exists"
+            exit 0
+          fi
+
+          body_file="$(mktemp)"
+          {
+            echo "Automatic upstream sync for \`${FORK_REPO}\`."
+            echo
+            echo "- Previous base: \`${old}\`"
+            echo "- New upstream tag: \`${newest}\` (from \`${UPSTREAM_REPO}\`)"
+            echo "- Branch: \`${branch}\`"
+            echo
+            echo "SP-CI on this PR is the build/test gate. A live stream smoke test is still manual and must be run on the owner's WSL/GPU machine after review. Do not merge if SP-CI is red."
+            echo
+            echo "This workflow never pushes to \`${UPSTREAM_REPO}\`."
+          } > "${body_file}"
+
+          gh pr create --repo "${FORK_REPO}" \
+            --base sp/main \
+            --head "${branch}" \
+            --title "${title}" \
+            --body-file "${body_file}"
