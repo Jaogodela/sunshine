@@ -294,6 +294,8 @@
     "sp_input_blocklist_desc": "Comma-separated keyboard combinations (MOD+KEY) that are dropped before they reach the game. Empty by default. When set, UTF-8 text injection is also dropped.",
     "sp_input_block_function_keys": "Block Function Keys",
     "sp_input_block_function_keys_desc": "When enabled, F1 through F12 are blocked even without modifiers.",
+    "sp_kbm_backend": "Keyboard/Mouse Backend",
+    "sp_kbm_backend_desc": "Selects how keyboard and mouse input is injected. 'uinput' uses libvirtualhid and keeps upstream behavior. 'xtest' uses X11 XTest for Xvfb sessions and drops UTF-8 text injection. 'wlr_virtual' is reserved and not implemented.",
     "keybindings": "Keybindings",
     "keyboard": "Enable Keyboard Input",
     "keyboard_desc": "Allows guests to control the host system with the keyboard",

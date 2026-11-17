@@ -312,6 +312,7 @@ namespace config {
 
     std::string sp_input_blocklist;  ///< Comma-separated keyboard combinations blocked on the host, in MOD+KEY notation.
     bool sp_input_block_function_keys;  ///< Block unmodified F1-F12 key presses from reaching the host.
+    std::string sp_kbm_backend {"uinput"};  ///< Keyboard/mouse backend: `uinput`, `xtest`, or the reserved `wlr_virtual`.
   };
 
   namespace flag {
