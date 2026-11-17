@@ -1,0 +1,251 @@
+---
+name: SP-CI
+
+# Gaspar fork CI. Upstream workflows (ci.yml, ci-linux.yml, ...) stay untouched;
+# this workflow only runs for our branches and pull requests.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches:
+      - sp/main
+      - 'sp/**'
+  workflow_dispatch:
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  DOCKERFILE: docker/sp-ubuntu-24.04.dockerfile
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      artifact_version: ${{ steps.version.outputs.artifact_version }}
+      build_version: ${{ steps.version.outputs.build_version }}
+      commit: ${{ steps.version.outputs.commit }}
+      deb_release: ${{ steps.version.outputs.deb_release }}
+      source_date_epoch: ${{ steps.version.outputs.source_date_epoch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Compute version and SOURCE_DATE_EPOCH
+        id: version
+        run: |
+          set -euo pipefail
+          source_date_epoch="$(git log -1 --format=%ct)"
+          commit="$(git rev-parse HEAD)"
+
+          # Nearest reachable v* tag, e.g. v2026.914.233613 or v2026.914.233613-sp.0.
+          tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          base_version="${tag#v}"
+          base_version="$(grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' <<<"${base_version}" || true)"
+          base_version="${base_version:-0.0.0}"
+
+          run_suffix="sp.ci${GITHUB_RUN_NUMBER}"
+          {
+            echo "artifact_version=${base_version}-${run_suffix}"
+            echo "build_version=${base_version}"
+            echo "commit=${commit}"
+            echo "deb_release=${run_suffix}+ubuntu24.04"
+            echo "source_date_epoch=${source_date_epoch}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build
+    needs: prepare
+    runs-on: ubuntu-latest
+    # CUDA-enabled Sunshine plus tests commonly needs 60-120 minutes.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+          df -h
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Test (Xvfb, no GPU)
+        # Compiles the tree once; the artifact build below reuses this cache.
+        # These tests do not exercise NVENC/VAAPI/Vulkan on real hardware.
+        run: |
+          docker buildx build \
+            --file "${DOCKERFILE}" \
+            --platform linux/amd64 \
+            --target sunshine-test \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }} \
+            --build-arg BUILD_VERSION=${{ needs.prepare.outputs.build_version }} \
+            --build-arg ARTIFACT_VERSION=${{ needs.prepare.outputs.artifact_version }} \
+            --build-arg DEB_RELEASE=${{ needs.prepare.outputs.deb_release }} \
+            --build-arg COMMIT=${{ needs.prepare.outputs.commit }} \
+            --build-arg BRANCH=${{ github.ref_name }} \
+            .
+
+      - name: Build .deb and tarball
+        run: |
+          docker buildx build \
+            --file "${DOCKERFILE}" \
+            --platform linux/amd64 \
+            --target artifacts \
+            --output type=local,dest=out \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }} \
+            --build-arg BUILD_VERSION=${{ needs.prepare.outputs.build_version }} \
+            --build-arg ARTIFACT_VERSION=${{ needs.prepare.outputs.artifact_version }} \
+            --build-arg DEB_RELEASE=${{ needs.prepare.outputs.deb_release }} \
+            --build-arg COMMIT=${{ needs.prepare.outputs.commit }} \
+            --build-arg BRANCH=${{ github.ref_name }} \
+            .
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          (cd out/artifacts && sha256sum ./*.deb ./*.tar.gz) > out/SHA256SUMS
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar -xzf out/artifacts/*.tar.gz -C /tmp/verify
+          sha256sum /tmp/verify/bin/sunshine | awk '{print $1}' > out/SUNSHINE_BINARY_SHA256
+          cat out/SHA256SUMS
+          echo "sunshine binary: $(cat out/SUNSHINE_BINARY_SHA256)"
+
+      - name: Show package metadata
+        run: |
+          set -euo pipefail
+          deb="$(find out/artifacts -name '*.deb' -print -quit)"
+          dpkg-deb --field "${deb}" Package Version Architecture Maintainer Description
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sp-deb
+          path: out/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sp-checksums
+          path: |
+            out/SHA256SUMS
+            out/SUNSHINE_BINARY_SHA256
+          if-no-files-found: error
+          retention-days: 14
+
+  reproducibility:
+    name: Reproducibility
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Download expected checksums
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: sp-checksums
+          path: expected
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+          df -h
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      - name: Rebuild .deb and tarball
+        # Fresh runner, no shared layer cache: this is an independent rebuild of
+        # the same commit with the same SOURCE_DATE_EPOCH.
+        run: |
+          docker buildx build \
+            --file "${DOCKERFILE}" \
+            --platform linux/amd64 \
+            --target artifacts \
+            --output type=local,dest=out \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --build-arg SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.source_date_epoch }} \
+            --build-arg BUILD_VERSION=${{ needs.prepare.outputs.build_version }} \
+            --build-arg ARTIFACT_VERSION=${{ needs.prepare.outputs.artifact_version }} \
+            --build-arg DEB_RELEASE=${{ needs.prepare.outputs.deb_release }} \
+            --build-arg COMMIT=${{ needs.prepare.outputs.commit }} \
+            --build-arg BRANCH=${{ github.ref_name }} \
+            .
+
+      - name: Compare sunshine binary
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar -xzf out/artifacts/*.tar.gz -C /tmp/verify
+
+          expected="$(tr -d '[:space:]' < expected/SUNSHINE_BINARY_SHA256)"
+          actual="$(sha256sum /tmp/verify/bin/sunshine | awk '{print $1}')"
+
+          echo "expected: ${expected}"
+          echo "actual:   ${actual}"
+
+          if [[ -z "${expected}" ]]; then
+            echo "::error::No expected binary checksum was downloaded"
+            exit 1
+          fi
+          if [[ "${expected}" != "${actual}" ]]; then
+            echo "::error::Sunshine binary is not reproducible; see docs/sp/reproducibility.md"
+            exit 1
+          fi
+          echo "Sunshine binary is reproducible for this commit and SOURCE_DATE_EPOCH."
+
+      - name: Report package checksums
+        run: |
+          set -euo pipefail
+          # The .deb container is not expected to be byte-identical yet (CPack
+          # and dpkg-deb metadata); report it without failing the job.
+          (cd out/artifacts && sha256sum ./*.deb ./*.tar.gz) > out/SHA256SUMS
+          echo "Expected:"
+          cat expected/SHA256SUMS
+          echo "Rebuilt:"
+          cat out/SHA256SUMS
+          if ! diff -u expected/SHA256SUMS out/SHA256SUMS; then
+            echo "::warning::Package checksums differ; only the sunshine binary is gated."
+          fi
