@@ -14,6 +14,8 @@
 
 // standard includes
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -127,9 +129,13 @@ namespace {
      */
     void SetUp() override {
       original_input_ = config::input;
+      original_file_apps_ = config::stream.file_apps;
       g_recorder = {};
       config::input.sp_kbm_backend = "uinput";
       platf::sp_xtest::set_ops_for_testing(&g_recording_ops);
+      test_apps_ = std::filesystem::temp_directory_path() / "sp_xtest_apps.json";
+      std::ofstream(test_apps_) << "[]\n";
+      config::stream.file_apps = test_apps_.string();
     }
 
     /**
@@ -138,10 +144,15 @@ namespace {
     void TearDown() override {
       platf::sp_xtest::set_ops_for_testing(nullptr);
       config::input = std::move(original_input_);
+      config::stream.file_apps = original_file_apps_;
+      std::error_code ec;
+      std::filesystem::remove(test_apps_, ec);
     }
 
   private:
     config::input_t original_input_;  ///< Configuration restored after each test.
+    std::string original_file_apps_;  ///< Default apps.json path restored after each test.
+    std::filesystem::path test_apps_;  ///< Temporary apps.json so apply_config can run in tests.
   };
 
 }  // namespace

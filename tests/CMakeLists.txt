@@ -184,6 +184,18 @@ add_executable(${PROJECT_NAME}
         ${TEST_SOURCES}
         ${SUNSHINE_SOURCES})
 
+# Seed SUNSHINE_ASSETS_DIR/apps.json so apply_config() can copy it in unit tests.
+# tests/CMakeLists.txt only used to copy tray icons into test_assets.
+if(WIN32)
+    set(SP_TEST_APPS_JSON "${CMAKE_SOURCE_DIR}/src_assets/windows/assets/apps.json")
+elseif(APPLE)
+    set(SP_TEST_APPS_JSON "${CMAKE_SOURCE_DIR}/src_assets/macos/assets/apps.json")
+else()
+    set(SP_TEST_APPS_JSON "${CMAKE_SOURCE_DIR}/src_assets/linux/assets/apps.json")
+endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test_assets")
+configure_file("${SP_TEST_APPS_JSON}" "${CMAKE_CURRENT_BINARY_DIR}/test_assets/apps.json" COPYONLY)
+
 # Copy files needed for config consistency tests to build directory
 # This ensures both CLI and CLion can access the same files relative to the test executable
 # Using configure_file ensures files are copied when they change between builds

@@ -27,9 +27,21 @@ namespace {
   class SpPairingConfigTest: public BaseTest {
   protected:
     /**
+     * @brief Point file_apps at a temporary file so apply_config can run in tests.
+     */
+    void SetUp() override {
+      BaseTest::SetUp();
+      test_apps_ = std::filesystem::temp_directory_path() / "sp_pairing_apps.json";
+      std::ofstream(test_apps_) << "[]\n";
+      config::stream.file_apps = test_apps_.string();
+    }
+
+    /**
      * @brief Restore the complete configuration after a parsing test.
      */
     void TearDown() override {
+      std::error_code ec;
+      std::filesystem::remove(test_apps_, ec);
       config::video = original_video_;
       config::audio = original_audio_;
       config::stream = original_stream_;
@@ -48,6 +60,7 @@ namespace {
     config::input_t original_input_ {config::input};  ///< Input configuration restored after each test.
     config::sunshine_t original_sunshine_ {config::sunshine};  ///< Core configuration restored after each test.
     decltype(config::modified_config_settings) original_modified_config_settings_ {config::modified_config_settings};  ///< Modified settings restored after each test.
+    fs::path test_apps_;  ///< Temporary apps.json so apply_config does not throw in tests.
   };
 
   /**
