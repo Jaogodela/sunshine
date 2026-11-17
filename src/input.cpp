@@ -10,7 +10,9 @@ extern "C" {
 
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <bitset>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -67,6 +69,8 @@ namespace input {
   constexpr auto VKEY_MENU = 0x12;  ///< Windows virtual-key code for menu.
   constexpr auto VKEY_LMENU = 0xA4;  ///< Windows virtual-key code for lmenu.
   constexpr auto VKEY_RMENU = 0xA5;  ///< Windows virtual-key code for rmenu.
+  constexpr auto VKEY_LWIN = 0x5B;  ///< Windows virtual-key code for the left Windows/meta key.
+  constexpr auto VKEY_RWIN = 0x5C;  ///< Windows virtual-key code for the right Windows/meta key.
 
   /**
    * @brief Enumerates supported button state options.
@@ -167,6 +171,7 @@ namespace input {
   static std::array<std::uint8_t, 5> mouse_press {};
 
   static platf::input_t platf_input;
+  static std::atomic<std::uint64_t> sp_input_blocks_total_count {0};  ///< Process-wide count of keyboard events swallowed by the input blocklist.
 #ifdef SUNSHINE_TESTS
   /**
    * @brief Recorder that unit tests install in place of the platform keyboard.
@@ -175,6 +180,16 @@ namespace input {
    */
   std::function<void(const testing::keyboard_event_t &)> &keyboard_sink() {
     static std::function<void(const testing::keyboard_event_t &)> sink;
+    return sink;
+  }
+
+  /**
+   * @brief Recorder that unit tests install in place of the platform text injector.
+   *
+   * @return Mutable reference to the recorder, empty when no test installed one.
+   */
+  std::function<void(std::string_view)> &unicode_sink() {
+    static std::function<void(std::string_view)> sink;
     return sink;
   }
 #endif
@@ -289,6 +304,7 @@ namespace input {
     modifier_state_t shift_keys;  ///< Client Shift keys contributing to the aggregate Shift flag.
     modifier_state_t control_keys;  ///< Client Control keys contributing to the aggregate Control flag.
     modifier_state_t alt_keys;  ///< Client Alt keys contributing to the aggregate Alt flag.
+    modifier_state_t meta_keys;  ///< Client Windows/meta keys held down, used by the input blocklist.
 
     std::vector<gamepad_t> gamepads;  ///< Virtual gamepad slots tracked for the stream.
     std::unique_ptr<platf::client_input_t> client_context;  ///< Client context.
@@ -987,6 +1003,12 @@ namespace input {
       case VKEY_RMENU:
         input.alt_keys.right_pressed = pressed;
         break;
+      case VKEY_LWIN:
+        input.meta_keys.left_pressed = pressed;
+        break;
+      case VKEY_RWIN:
+        input.meta_keys.right_pressed = pressed;
+        break;
       default:
         break;
     }
@@ -1064,6 +1086,391 @@ namespace input {
     }
   }
 
+  constexpr auto VKEY_TAB = 0x09;  ///< Windows virtual-key code for tab.
+  constexpr auto VKEY_ESCAPE = 0x1B;  ///< Windows virtual-key code for escape.
+  constexpr auto VKEY_SPACE = 0x20;  ///< Windows virtual-key code for space.
+  constexpr auto VKEY_PAUSE = 0x13;  ///< Windows virtual-key code for pause.
+  constexpr auto VKEY_SNAPSHOT = 0x2C;  ///< Windows virtual-key code for print screen / system request.
+  constexpr auto VKEY_SCROLL = 0x91;  ///< Windows virtual-key code for scroll lock.
+  constexpr auto VKEY_F1 = 0x70;  ///< Windows virtual-key code for the first function key.
+  constexpr auto VKEY_F12 = 0x7B;  ///< Windows virtual-key code for the last function key.
+
+  constexpr std::uint8_t SP_MOD_CTRL = 0x01;  ///< Blocklist modifier bit for Ctrl.
+  constexpr std::uint8_t SP_MOD_ALT = 0x02;  ///< Blocklist modifier bit for Alt.
+  constexpr std::uint8_t SP_MOD_SHIFT = 0x04;  ///< Blocklist modifier bit for Shift.
+  constexpr std::uint8_t SP_MOD_META = 0x08;  ///< Blocklist modifier bit for Windows/meta/Super.
+
+  /**
+   * @brief One compiled keyboard combination from the input blocklist.
+   */
+  struct sp_block_rule_t {
+    std::uint8_t modifiers;  ///< Modifier bits that must all be held.
+    std::uint16_t key;  ///< Windows virtual-key code to block, unused for wildcard rules.
+    bool wildcard;  ///< Whether the rule blocks any non-modifier key while the modifiers are held.
+  };
+
+  /**
+   * @brief Compiled representation of the configured keyboard blocklist.
+   */
+  struct sp_block_rules_t {
+    std::vector<sp_block_rule_t> rules;  ///< Parsed combinations, empty when nothing is blocked.
+    bool block_function_keys = false;  ///< Whether unmodified F1-F12 presses are blocked as well.
+
+    /**
+     * @brief Check whether the compiled rules block nothing at all.
+     *
+     * @return True when neither a combination nor function-key blocking is configured.
+     */
+    [[nodiscard]] bool empty() const {
+      return rules.empty() && !block_function_keys;
+    }
+  };
+
+  /**
+   * @brief Cached blocklist compilation and the configuration it was built from.
+   */
+  struct sp_block_cache_t {
+    std::mutex mutex;  ///< Serializes recompilation and evaluation.
+    std::string source;  ///< Raw blocklist string the cached rules were parsed from.
+    bool function_keys = false;  ///< Function-key flag the cached rules were parsed with.
+    bool initialized = false;  ///< Whether the cached rules have been built at least once.
+    sp_block_rules_t rules;  ///< Compiled rules.
+  };
+
+  /**
+   * @brief Access the process-wide blocklist cache.
+   *
+   * @return Mutable cache instance.
+   */
+  sp_block_cache_t &sp_block_cache() {
+    static sp_block_cache_t cache;
+    return cache;
+  }
+
+  /**
+   * @brief Remove leading and trailing ASCII whitespace.
+   *
+   * @param value Text to trim.
+   * @return Trimmed view into the original text.
+   */
+  std::string_view sp_trim(std::string_view value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+      value.remove_prefix(1);
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+      value.remove_suffix(1);
+    }
+    return value;
+  }
+
+  /**
+   * @brief Convert a token to upper case for case-insensitive matching.
+   *
+   * @param value Token to convert.
+   * @return Upper-case copy of the token.
+   */
+  std::string sp_upper(std::string_view value) {
+    std::string result {value};
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char character) {
+      return static_cast<char>(std::toupper(character));
+    });
+    return result;
+  }
+
+  /**
+   * @brief Resolve a key name in a blocklist combination.
+   *
+   * @param token Upper-case token to resolve.
+   * @return Windows virtual-key code, or `std::nullopt` when the name is unknown.
+   */
+  std::optional<std::uint16_t> sp_key_from_token(std::string_view token) {
+    if (token.size() >= 2 && token.front() == 'F') {
+      int number = 0;
+      for (auto character : token.substr(1)) {
+        if (!std::isdigit(static_cast<unsigned char>(character))) {
+          number = 0;
+          break;
+        }
+        number = number * 10 + (character - '0');
+      }
+      if (number >= 1 && number <= 12) {
+        return static_cast<std::uint16_t>(VKEY_F1 + number - 1);
+      }
+    }
+
+    if (token == "TAB"sv) {
+      return VKEY_TAB;
+    }
+    if (token == "ESC"sv || token == "ESCAPE"sv) {
+      return VKEY_ESCAPE;
+    }
+    if (token == "SPACE"sv) {
+      return VKEY_SPACE;
+    }
+    if (token == "SYSRQ"sv || token == "PRINTSCREEN"sv || token == "PRINT"sv) {
+      return VKEY_SNAPSHOT;
+    }
+    if (token == "SCROLLLOCK"sv) {
+      return VKEY_SCROLL;
+    }
+    if (token == "PAUSE"sv) {
+      return VKEY_PAUSE;
+    }
+
+    return std::nullopt;
+  }
+
+  /**
+   * @brief Resolve a standalone key name such as LEFTMETA.
+   *
+   * @param token Upper-case token to resolve.
+   * @return Windows virtual-key code, or `std::nullopt` when the name is unknown.
+   */
+  std::optional<std::uint16_t> sp_standalone_key_from_token(std::string_view token) {
+    if (token == "LEFTMETA"sv || token == "LWIN"sv) {
+      return VKEY_LWIN;
+    }
+    if (token == "RIGHTMETA"sv || token == "RWIN"sv) {
+      return VKEY_RWIN;
+    }
+    return sp_key_from_token(token);
+  }
+
+  /**
+   * @brief Resolve a modifier name in a blocklist combination.
+   *
+   * @param token Upper-case token to resolve.
+   * @param bit Destination for the matching SP_MOD_* bit.
+   * @return True when the token names a modifier.
+   */
+  bool sp_modifier_bit_from_token(std::string_view token, std::uint8_t &bit) {
+    if (token == "CTRL"sv || token == "LCONTROL"sv || token == "RCONTROL"sv) {
+      bit = SP_MOD_CTRL;
+      return true;
+    }
+    if (token == "ALT"sv || token == "LMENU"sv || token == "RMENU"sv) {
+      bit = SP_MOD_ALT;
+      return true;
+    }
+    if (token == "SHIFT"sv || token == "LSHIFT"sv || token == "RSHIFT"sv) {
+      bit = SP_MOD_SHIFT;
+      return true;
+    }
+    if (
+      token == "META"sv || token == "WIN"sv || token == "SUPER"sv ||
+      token == "LEFTMETA"sv || token == "RIGHTMETA"sv || token == "LWIN"sv || token == "RWIN"sv
+    ) {
+      bit = SP_MOD_META;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * @brief Parse one comma-separated blocklist entry into a rule.
+   *
+   * Invalid entries are logged and skipped so one typo does not disable the rest of the list.
+   *
+   * @param entry Text of one combination, without surrounding whitespace.
+   * @param rules Destination receiving a rule when the entry is valid.
+   */
+  void sp_parse_block_rule(std::string_view entry, sp_block_rules_t &rules) {
+    const std::string original {entry};
+    std::vector<std::string> parts;
+    while (!entry.empty()) {
+      auto plus = entry.find('+');
+      parts.push_back(sp_upper(sp_trim(entry.substr(0, plus))));
+      if (plus == std::string_view::npos) {
+        break;
+      }
+      entry.remove_prefix(plus + 1);
+    }
+
+    if (parts.empty() || std::ranges::any_of(parts, [](const std::string &part) {
+          return part.empty();
+        })) {
+      BOOST_LOG(warning) << "Ignoring invalid sp_input_blocklist entry: '"sv << original << "'"sv;
+      return;
+    }
+
+    if (parts.size() == 1) {
+      if (auto key = sp_standalone_key_from_token(parts.front())) {
+        rules.rules.push_back({0, *key, false});
+        return;
+      }
+
+      std::uint8_t bit = 0;
+      if (sp_modifier_bit_from_token(parts.front(), bit)) {
+        std::uint16_t key = VKEY_LWIN;
+        if (bit == SP_MOD_CTRL) {
+          key = VKEY_CONTROL;
+        } else if (bit == SP_MOD_ALT) {
+          key = VKEY_MENU;
+        } else if (bit == SP_MOD_SHIFT) {
+          key = VKEY_SHIFT;
+        }
+        rules.rules.push_back({0, key, false});
+        return;
+      }
+
+      BOOST_LOG(warning) << "Ignoring invalid sp_input_blocklist entry: '"sv << parts.front() << "'"sv;
+      return;
+    }
+
+    std::uint8_t modifiers = 0;
+    for (auto part = parts.begin(); part != parts.end() - 1; ++part) {
+      std::uint8_t bit = 0;
+      if (!sp_modifier_bit_from_token(*part, bit)) {
+        BOOST_LOG(warning) << "Ignoring invalid sp_input_blocklist modifier: '"sv << *part << "'"sv;
+        return;
+      }
+      modifiers |= bit;
+    }
+
+    const auto &last = parts.back();
+    if (last == "*"sv) {
+      rules.rules.push_back({modifiers, 0, true});
+      return;
+    }
+
+    if (auto key = sp_key_from_token(last)) {
+      rules.rules.push_back({modifiers, *key, false});
+      return;
+    }
+
+    BOOST_LOG(warning) << "Ignoring invalid sp_input_blocklist key: '"sv << last << "'"sv;
+  }
+
+  /**
+   * @brief Parse a complete comma-separated blocklist.
+   *
+   * @param list Raw configured list.
+   * @param rules Destination rebuilt from the list.
+   */
+  void sp_parse_block_rules(std::string_view list, sp_block_rules_t &rules) {
+    rules.rules.clear();
+
+    while (!list.empty()) {
+      const auto comma = list.find(',');
+      const auto entry = sp_trim(list.substr(0, comma));
+      if (!entry.empty()) {
+        sp_parse_block_rule(entry, rules);
+      }
+      if (comma == std::string_view::npos) {
+        break;
+      }
+      list.remove_prefix(comma + 1);
+    }
+  }
+
+  /**
+   * @brief Recompile the cached rules when the configuration changed.
+   *
+   * @param cache Cache to refresh. The caller must hold its mutex.
+   * @return Compiled rules for the current configuration.
+   */
+  const sp_block_rules_t &sp_refresh_block_rules(sp_block_cache_t &cache) {
+    const auto &list = config::input.sp_input_blocklist;
+    const auto function_keys = config::input.sp_input_block_function_keys;
+    if (!cache.initialized || cache.source != list || cache.function_keys != function_keys) {
+      sp_parse_block_rules(list, cache.rules);
+      cache.rules.block_function_keys = function_keys;
+      cache.source = list;
+      cache.function_keys = function_keys;
+      cache.initialized = true;
+    }
+    return cache.rules;
+  }
+
+  /**
+   * @brief Check whether a key is a modifier for blocklist wildcard purposes.
+   *
+   * @param key_code Windows virtual-key code.
+   * @return True when the key only holds a modifier.
+   */
+  bool sp_is_modifier_key(std::uint16_t key_code) {
+    return is_modifier(key_code) || key_code == VKEY_LWIN || key_code == VKEY_RWIN;
+  }
+
+  /**
+   * @brief Compute the client modifier state used to match blocklist rules.
+   *
+   * @param input Stream input state tracking side-specific modifier keys.
+   * @param packet_modifiers Modifier mask reported by the client packet.
+   * @return SP_MOD_* bits that are currently held.
+   */
+  std::uint8_t sp_effective_modifiers(const input_t &input, int packet_modifiers) {
+    const bool right_alt_as_meta =
+      config::input.key_rightalt_to_key_win && input.alt_keys.right_pressed && !input.alt_keys.left_pressed;
+
+    std::uint8_t modifiers = 0;
+    if (input.shift_keys.any_pressed() || (packet_modifiers & MODIFIER_SHIFT)) {
+      modifiers |= SP_MOD_SHIFT;
+    }
+    if (input.control_keys.any_pressed() || (packet_modifiers & MODIFIER_CTRL)) {
+      modifiers |= SP_MOD_CTRL;
+    }
+    if (!right_alt_as_meta && (input.alt_keys.any_pressed() || (packet_modifiers & MODIFIER_ALT))) {
+      modifiers |= SP_MOD_ALT;
+    }
+    if (input.meta_keys.any_pressed() || (packet_modifiers & MODIFIER_META) || right_alt_as_meta) {
+      modifiers |= SP_MOD_META;
+    }
+    return modifiers;
+  }
+
+  /**
+   * @brief Check whether the configured blocklist swallows a key-down.
+   *
+   * @param key_code Windows virtual-key code from the client packet.
+   * @param modifiers Client modifier state computed by sp_effective_modifiers().
+   * @return True when the key-down must not reach the platform backend.
+   */
+  bool sp_should_block_key(std::uint16_t key_code, std::uint8_t modifiers) {
+    auto &cache = sp_block_cache();
+    std::lock_guard lock {cache.mutex};
+    const auto &rules = sp_refresh_block_rules(cache);
+
+    if (rules.block_function_keys && key_code >= VKEY_F1 && key_code <= VKEY_F12) {
+      return true;
+    }
+
+    for (const auto &rule : rules.rules) {
+      if ((modifiers & rule.modifiers) != rule.modifiers) {
+        continue;
+      }
+      if (rule.wildcard) {
+        if (!sp_is_modifier_key(key_code)) {
+          return true;
+        }
+      } else if (rule.key == key_code) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * @brief Check whether any blocklist rule is active.
+   *
+   * @return True when the blocklist or function-key blocking is configured.
+   */
+  bool sp_input_blocklist_active() {
+    auto &cache = sp_block_cache();
+    std::lock_guard lock {cache.mutex};
+    return !sp_refresh_block_rules(cache).empty();
+  }
+
+  /**
+   * @brief Return how many client keyboard events the input blocklist swallowed.
+   *
+   * @return Process-wide monotonic block count.
+   */
+  std::uint64_t sp_input_blocks_total() {
+    return sp_input_blocks_total_count.load(std::memory_order_relaxed);
+  }
+
   /**
    * @brief Deliver one keyboard event to the platform backend.
    *
@@ -1081,6 +1488,24 @@ namespace input {
     }
 #endif
     platf::keyboard_update(platf_input, key_code, release, flags);
+  }
+
+  /**
+   * @brief Deliver UTF-8 text to the platform backend.
+   *
+   * Test builds can divert the text to a recorder so unit tests never type into the host.
+   *
+   * @param text UTF-8 text to emit.
+   * @param size Number of bytes in the text.
+   */
+  void emit_unicode(const char *text, int size) {
+#ifdef SUNSHINE_TESTS
+    if (unicode_sink()) {
+      unicode_sink()(std::string_view {text, static_cast<std::size_t>(size)});
+      return;
+    }
+#endif
+    platf::unicode(platf_input, text, size);
   }
 
   /**
@@ -1160,6 +1585,15 @@ namespace input {
     int modifiers = packet->modifiers;
     if (config::input.key_rightalt_to_key_win && input->alt_keys.right_pressed && !input->alt_keys.left_pressed) {
       modifiers &= ~MODIFIER_ALT;
+      modifiers |= MODIFIER_META;
+    }
+
+    // Block escape combinations before any backend or shortcut side effect sees the key.
+    // The check uses the client virtual-key code so a keybinding remap cannot hide the intent.
+    if (!release && sp_should_block_key(keyCode, sp_effective_modifiers(*input, modifiers))) {
+      ++sp_input_blocks_total_count;
+      BOOST_LOG(debug) << "Blocked keyboard input: vk=0x"sv << util::hex((std::uint8_t) keyCode).to_string_view();
+      return;
     }
 
     // Set synthetic modifier flags if the keyboard packet is requesting modifier
@@ -1268,8 +1702,16 @@ namespace input {
       return;
     }
 
+    // Text injection cannot be filtered key by key, so the whole event is dropped whenever any
+    // blocklist rule is active. This prevents a client from bypassing the keyboard blocklist by
+    // typing an escape sequence (or any other text) instead of sending key packets.
+    if (sp_input_blocklist_active()) {
+      BOOST_LOG(debug) << "Dropping UTF-8 text input because the keyboard blocklist is active"sv;
+      return;
+    }
+
     int size = util::endian::big(packet->header.size) - sizeof(packet->header.magic);
-    platf::unicode(platf_input, packet->text, size);
+    emit_unicode(packet->text, size);
   }
 
   /**
@@ -2362,6 +2804,22 @@ namespace input {
 
     void set_keyboard_sink(std::function<void(const keyboard_event_t &)> sink) {
       keyboard_sink() = std::move(sink);
+    }
+
+    void set_unicode_sink(std::function<void(std::string_view)> sink) {
+      unicode_sink() = std::move(sink);
+    }
+
+    void send_unicode_text(std::shared_ptr<input_t> &input, std::string_view text) {
+      static_cast<void>(input);
+
+      std::vector<std::uint8_t> buffer(sizeof(NV_UNICODE_PACKET) + text.size());
+      auto *packet = reinterpret_cast<NV_UNICODE_PACKET *>(buffer.data());
+      packet->header.size = util::endian::big<std::uint32_t>(sizeof(packet->header.magic) + text.size());
+      packet->header.magic = util::endian::little<std::uint32_t>(UTF8_TEXT_EVENT_MAGIC);
+      std::memcpy(packet->text, text.data(), text.size());
+
+      ::input::passthrough(packet);
     }
 
     void send_keyboard_packet(std::shared_ptr<input_t> &input, std::uint16_t key_code, std::uint8_t modifiers, std::uint8_t flags, bool release) {

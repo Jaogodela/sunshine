@@ -306,6 +306,9 @@ namespace config {
 
     bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
     bool native_pen_touch;  ///< Enable native pen and touch injection.
+
+    std::string sp_input_blocklist;  ///< Comma-separated keyboard combinations blocked on the host, in MOD+KEY notation.
+    bool sp_input_block_function_keys;  ///< Block unmodified F1-F12 key presses from reaching the host.
   };
 
   namespace flag {
