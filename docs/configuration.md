@@ -2010,6 +2010,31 @@ supported on the current platform.
     </tr>
 </table>
 
+### sp_trusted_client_cert
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Path to a PEM client certificate that is authorized without PIN pairing for the lifetime of the
+            Sunshine process. This is used by the Gaspar web bridge to connect as an already-paired Moonlight
+            client. The entry is kept in memory only and is not written to the state file. The existing
+            <code>cert</code> and <code>pkey</code> options continue to provide the server certificate and key;
+            no separate server certificate options are needed.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">Empty (disabled).</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            sp_trusted_client_cert = /dir/bridge-client.pem
+            @endcode</td>
+    </tr>
+</table>
+
 ## Advanced
 
 ### fec_percentage
@@ -2280,6 +2305,31 @@ supported on the current platform.
     <tr>
         <td>software</td>
         <td>Encoding occurs on the CPU</td>
+    </tr>
+</table>
+
+### sp_disable_pin_pairing
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Refuse all new PIN pairing requests and the Web UI pending-pairing APIs. Existing paired clients
+            remain authorized. This is used by the Gaspar web bridge, which pairs a pre-provisioned trusted
+            client certificate instead.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            false
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            sp_disable_pin_pairing = true
+            @endcode</td>
     </tr>
 </table>
 

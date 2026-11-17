@@ -87,6 +87,18 @@ namespace nvhttp {
   void setup(const std::string &pkey, const std::string &cert);
 
   /**
+   * @brief Authorize the pre-provisioned Gaspar bridge client certificate without PIN pairing.
+   *
+   * The certificate is read from `config::nvhttp.sp_trusted_client_cert` and added to the in-memory
+   * paired-client database only. It is not persisted to the state file and is re-applied when all
+   * clients are removed, so the bridge remains authorized until the process exits.
+   *
+   * @return `true` when the configured certificate is authorized, `false` when the option is empty or
+   * the certificate cannot be read or parsed.
+   */
+  bool apply_trusted_client_cert();
+
+  /**
    * @brief Simple-Web-Server HTTPS backend configured for Sunshine certificate handling.
    */
   class SunshineHTTPS: public SimpleWeb::HTTPS {

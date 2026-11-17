@@ -679,6 +679,27 @@ namespace confighttp {
   }
 
   /**
+   * @brief Send a 403 Forbidden response.
+   * @param response The HTTP response object.
+   * @param error_message The error message to include in the response.
+   */
+  void send_forbidden(const resp_https_t &response, const std::string &error_message) {
+    constexpr auto code = SimpleWeb::StatusCode::client_error_forbidden;
+
+    nlohmann::json tree;
+    tree["status_code"] = code;
+    tree["status"] = false;
+    tree["error"] = error_message;
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+
+    response->write(code, tree.dump(), headers);
+  }
+
+  /**
    * @brief Validate the request content type and send a bad request when mismatched.
    */
   bool check_content_type(const resp_https_t &response, const req_https_t &request, const std::string_view &contentType) {
@@ -1748,6 +1769,11 @@ namespace confighttp {
       return;
     }
 
+    if (config::nvhttp.sp_disable_pin_pairing) {
+      send_forbidden(response, "PIN pairing is disabled");
+      return;
+    }
+
     print_req(request);
 
     nlohmann::json output_tree;
@@ -1783,6 +1809,11 @@ namespace confighttp {
 
     const std::string client_id = get_client_id(request);
     if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    if (config::nvhttp.sp_disable_pin_pairing) {
+      send_forbidden(response, "PIN pairing is disabled");
       return;
     }
 
@@ -1834,6 +1865,11 @@ namespace confighttp {
 
     std::string client_id = get_client_id(request);
     if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    if (config::nvhttp.sp_disable_pin_pairing) {
+      send_forbidden(response, "PIN pairing is disabled");
       return;
     }
 

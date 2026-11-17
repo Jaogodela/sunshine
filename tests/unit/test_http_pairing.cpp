@@ -24,6 +24,7 @@
 // local includes
 #include <src/config.h>
 #include <src/nvhttp.h>
+#include <src/utility.h>
 
 using namespace nvhttp;
 
@@ -419,7 +420,10 @@ namespace {
       expire_pair_sessions(std::chrono::steady_clock::time_point::max());
       original_pin_stdin_ = config::sunshine.flags[config::flag::PIN_STDIN];
       original_ping_timeout_ = config::stream.ping_timeout;
+      original_disable_pin_pairing_ = config::nvhttp.sp_disable_pin_pairing;
+      original_trusted_client_cert_ = config::nvhttp.sp_trusted_client_cert;
       config::sunshine.flags[config::flag::PIN_STDIN] = false;
+      config::nvhttp.sp_disable_pin_pairing = false;
 
       server_ = std::make_unique<SimpleWeb::Server<SimpleWeb::HTTP>>();
       server_->config.port = 0;
@@ -457,6 +461,8 @@ namespace {
       server_.reset();
       config::sunshine.flags[config::flag::PIN_STDIN] = original_pin_stdin_;
       config::stream.ping_timeout = original_ping_timeout_;
+      config::nvhttp.sp_disable_pin_pairing = original_disable_pin_pairing_;
+      config::nvhttp.sp_trusted_client_cert = original_trusted_client_cert_;
       BaseTest::TearDown();
     }
 
@@ -508,6 +514,8 @@ namespace {
     std::atomic<unsigned short> port_ {0};  ///< Ephemeral port assigned to the local server.
     bool original_pin_stdin_;  ///< Console-PIN flag restored after each test.
     std::chrono::milliseconds original_ping_timeout_;  ///< Configured client timeout restored after each test.
+    bool original_disable_pin_pairing_;  ///< PIN pairing flag restored after each test.
+    std::string original_trusted_client_cert_;  ///< Trusted client certificate setting restored after each test.
   };
 }  // namespace
 
@@ -532,6 +540,30 @@ TEST_F(PairingHttpHandlerTest, WebApprovalRequestRemainsPendingUntilCancelled) {
   ASSERT_FALSE(pairing_id.empty());
   EXPECT_TRUE(cancel_pairing(pairing_id));
   EXPECT_NE(response.get().find("cancelled by operator"), std::string::npos);
+}
+
+TEST_F(PairingHttpHandlerTest, DisabledPinPairingRejectsCertificatePhase) {
+  config::nvhttp.sp_disable_pin_pairing = true;
+
+  const auto response = request(server_certificate_target("disabled"));
+  EXPECT_NE(response.find("status_code=\"403\""), std::string::npos);
+  EXPECT_NE(response.find("<paired>0</paired>"), std::string::npos);
+  EXPECT_TRUE(get_pending_pairings().empty());
+}
+
+TEST_F(PairingHttpHandlerTest, PinPairingStartsWhenNotDisabled) {
+  EXPECT_FALSE(config::nvhttp.sp_disable_pin_pairing);
+
+  std::packaged_task<std::string()> request_task {[this]() {
+    return request(server_certificate_target("still-enabled"));
+  }};
+  auto response = request_task.get_future();
+  std::jthread request_thread {std::move(request_task)};
+
+  const auto pairing_id = wait_for_pending_pairing();
+  ASSERT_FALSE(pairing_id.empty());
+  EXPECT_TRUE(cancel_pairing(pairing_id));
+  EXPECT_NE(response.get().find("status_code=\"400\""), std::string::npos);
 }
 
 TEST_F(PairingHttpHandlerTest, PinReturnsCompletedHandshakeResult) {
@@ -654,6 +686,24 @@ TEST_F(PairingSessionRegistryTest, InvalidApprovalCannotConsumePendingSession) {
   const auto pending = get_pending_pairings();
   ASSERT_EQ(pending.size(), 1);
   EXPECT_EQ(pending.front().id, pairing_id);
+}
+
+TEST_F(PairingSessionRegistryTest, DisabledPinPairingRefusesApprovalAndCancellation) {
+  std::string pairing_id;
+  ASSERT_EQ(
+    insert_pair_session(pending_session("disabled-approval", "Client", "192.0.2.10"), pairing_id),
+    pair_session_insert_e::ADDED
+  );
+
+  const bool original_disable_pin_pairing = config::nvhttp.sp_disable_pin_pairing;
+  config::nvhttp.sp_disable_pin_pairing = true;
+  auto restore = util::fail_guard([&]() {
+    config::nvhttp.sp_disable_pin_pairing = original_disable_pin_pairing;
+  });
+
+  EXPECT_FALSE(pin(pairing_id, "1234", "Client"));
+  EXPECT_FALSE(cancel_pairing(pairing_id));
+  EXPECT_EQ(get_pending_pairings().size(), 1);
 }
 
 TEST_F(PairingSessionRegistryTest, RestApiPairingFieldsAreValidatedServerSide) {

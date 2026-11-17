@@ -278,6 +278,9 @@ namespace config {
     std::string file_state;  ///< Path to the persisted Sunshine state file.
 
     std::string external_ip;  ///< External address advertised to clients when configured.
+
+    std::string sp_trusted_client_cert;  ///< Gaspar: path to a client certificate trusted without PIN pairing.
+    bool sp_disable_pin_pairing;  ///< Gaspar: refuse all PIN pairing while enabled.
   };
 
   /**
