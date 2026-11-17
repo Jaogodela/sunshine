@@ -44,6 +44,14 @@ const effectivePort = computed(() => +config.value?.port ?? defaultMoonlightPort
       <div class="form-text">{{ $t('config.bind_address_desc') }}</div>
     </div>
 
+    <!-- Local metrics and events port -->
+    <div class="mb-3">
+      <label for="sp_metrics_port" class="form-label">{{ $t('config.sp_metrics_port') }}</label>
+      <input type="number" min="0" max="65535" class="form-control" id="sp_metrics_port" placeholder="0"
+             v-model="config.sp_metrics_port" />
+      <div class="form-text">{{ $t('config.sp_metrics_port_desc') }}</div>
+    </div>
+
     <!-- Port family -->
     <div class="mb-3">
       <label for="port" class="form-label">{{ $t('config.port') }}</label>

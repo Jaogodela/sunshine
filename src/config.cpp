@@ -891,6 +891,7 @@ namespace config {
     47989,  // Base port number
     "ipv4",  // Address family
     {},  // Bind address
+    0,  // Metrics/events port (Gaspar, disabled by default)
     platf::appdata().string() + "/sunshine.log",  // log file
     false,  // notify_pre_releases
     true,  // system_tray
@@ -1885,6 +1886,9 @@ namespace config {
 
     string_restricted_f(vars, "address_family", sunshine.address_family, {"ipv4"sv, "both"sv});
     string_f(vars, "bind_address", sunshine.bind_address);
+
+    // Gaspar: optional local metrics/events endpoint. Out-of-range values keep the disabled default.
+    int_between_f(vars, "sp_metrics_port"s, sunshine.sp_metrics_port, {0, 65535});
 
     bool upnp = false;
     bool_f(vars, "upnp"s, upnp);

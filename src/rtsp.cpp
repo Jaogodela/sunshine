@@ -28,6 +28,7 @@ extern "C" {
 #include "logging.h"
 #include "network.h"
 #include "rtsp.h"
+#include "sp_metrics.h"
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
@@ -657,6 +658,7 @@ namespace rtsp_stream {
         if (all || stream::session::state(slot) == stream::session::state_e::STOPPING) {
           stream::session::stop(slot);
           stream::session::join(slot);
+          sp_metrics::record_event("client_disconnected");
 
           i = _session_slots->erase(i);
         } else {
@@ -677,6 +679,7 @@ namespace rtsp_stream {
         if (stream::session::client_cert(slot) == cert) {
           stream::session::stop(slot);
           stream::session::join(slot);
+          sp_metrics::record_event("client_disconnected");
           i = _session_slots->erase(i);
         } else {
           i++;
@@ -691,6 +694,7 @@ namespace rtsp_stream {
     void remove(const std::shared_ptr<stream::session_t> &session) {
       auto lg = _session_slots.lock();
       _session_slots->erase(session);
+      sp_metrics::record_event("client_disconnected");
     }
 
     /**
@@ -700,6 +704,7 @@ namespace rtsp_stream {
     void insert(const std::shared_ptr<stream::session_t> &session) {
       auto lg = _session_slots.lock();
       _session_slots->emplace(session);
+      sp_metrics::record_event("client_connected", std::format("active={}", _session_slots->size()));
       BOOST_LOG(info) << "New streaming session started [active sessions: "sv << _session_slots->size() << ']';
     }
 
