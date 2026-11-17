@@ -159,3 +159,12 @@ git push origin v2026.914.233613-sp.0
   upstream LizardByte values because the fork does not patch upstream packaging
   templates. The publisher metadata compiled into the binary is the fork's
   (Jaogodela).
+
+## Upstream sync
+
+`.github/workflows/upstream-sync.yml` runs every Monday at 06:00 UTC and on
+manual dispatch. It fast-forwards the `upstream-sync` branch to
+`upstream/master` and, when a new stable tag appears, rebases the commits on
+`sp/main` onto that tag, then opens a PR (or an issue, if the rebase
+conflicts). It never pushes to upstream. A live stream smoke test after the PR
+is still manual.
