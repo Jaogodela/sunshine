@@ -869,6 +869,9 @@ namespace config {
     true,  // always send scancodes
     true,  // high resolution scrolling
     true,  // native pen/touch support
+
+    {},  // sp_input_blocklist
+    false,  // sp_input_block_function_keys
   };
 
   /**
@@ -1810,6 +1813,9 @@ namespace config {
     if (input.key_rightalt_to_key_win) {
       input.keybindings.emplace(0xA5, 0x5B);
     }
+
+    string_f(vars, "sp_input_blocklist", input.sp_input_blocklist);
+    bool_f(vars, "sp_input_block_function_keys", input.sp_input_block_function_keys);
 
     to = std::numeric_limits<int>::min();
     int_f(vars, "back_button_timeout", to);

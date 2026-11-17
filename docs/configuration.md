@@ -662,6 +662,58 @@ supported on the current platform.
     </tr>
 </table>
 
+### sp_input_blocklist
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Comma-separated keyboard combinations that Sunshine drops before they reach the
+            game or compositor, written in <code>MOD+KEY</code> notation. The list is empty by
+            default so behavior matches upstream. A typical Gaspar session uses
+            <code>LEFTMETA,RIGHTMETA,SYSRQ,ALT+F4,ALT+TAB,ALT+SHIFT+TAB,ALT+ESC,CTRL+ESC,CTRL+ALT+*,ALT+F2,ALT+SPACE,SCROLLLOCK,PAUSE</code>.
+            Invalid tokens are ignored. When this list is non-empty, UTF-8 text injection is also
+            dropped so it cannot bypass the blocklist.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            (empty)
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            sp_input_blocklist = ALT+F4,CTRL+ALT+*
+            @endcode</td>
+    </tr>
+</table>
+
+### sp_input_block_function_keys
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When enabled, F1 through F12 are blocked even without modifiers. Leave this disabled
+            for games that use function keys.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            sp_input_block_function_keys = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### mouse
 
 <table>

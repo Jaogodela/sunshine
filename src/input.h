@@ -84,6 +84,16 @@ namespace input {
    */
   std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
 
+  /**
+   * @brief Return how many client keyboard events the configured blocklist has swallowed.
+   *
+   * The counter is process-wide and monotonic. It is intended to back a Prometheus counter
+   * once the metrics endpoint learns about input statistics.
+   *
+   * @return Total number of blocked keyboard events since the process started.
+   */
+  std::uint64_t sp_input_blocks_total();
+
 #ifdef SUNSHINE_TESTS
   namespace testing {
     /**
@@ -131,6 +141,22 @@ namespace input {
      *             delivery to the platform backend.
      */
     void set_keyboard_sink(std::function<void(const keyboard_event_t &)> sink);
+
+    /**
+     * @brief Redirect UTF-8 text output away from the host operating system.
+     *
+     * @param sink Recorder invoked in place of platf::unicode, or empty to restore delivery to
+     *             the platform backend.
+     */
+    void set_unicode_sink(std::function<void(std::string_view)> sink);
+
+    /**
+     * @brief Process one client UTF-8 text packet on the calling thread.
+     *
+     * @param input Retained input state.
+     * @param text UTF-8 text carried by the packet.
+     */
+    void send_unicode_text(std::shared_ptr<input_t> &input, std::string_view text);
 
     /**
      * @brief Process one client keyboard packet on the calling thread.
